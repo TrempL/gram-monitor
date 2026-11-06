@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GRAM — курс</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #0e1116; --card: #161b22; --line: #262c36;
+      --text: #e6edf3; --muted: #8b949e; --accent: #2ea8ff;
+      --up: #3fb950; --down: #f85149;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: flex; justify-content: center; padding: 32px 16px;
+    }
+    main { width: 100%; max-width: 760px; }
+    header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+    .logo {
+      width: 40px; height: 40px; border-radius: 50%; background: var(--accent);
+      display: grid; place-items: center; font-weight: 700; color: #fff;
+    }
+    h1 { font-size: 20px; margin: 0; }
+    .sub { color: var(--muted); font-size: 13px; }
+    .card {
+      background: var(--card); border: 1px solid var(--line);
+      border-radius: 14px; padding: 20px; margin-bottom: 16px;
+    }
+    .prices { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .label { color: var(--muted); font-size: 13px; margin-bottom: 4px; }
+    .price { font-size: 34px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .change { display: inline-block; margin-top: 6px; padding: 2px 8px;
+              border-radius: 6px; font-size: 14px; font-weight: 600; }
+    .change.up { color: var(--up); background: rgba(63,185,80,.12); }
+    .change.down { color: var(--down); background: rgba(248,81,73,.12); }
+    .status { color: var(--muted); font-size: 12px; margin-top: 14px; }
+    .status.warn { color: #d29922; }
+    .toolbar { display: flex; justify-content: space-between; flex-wrap: wrap;
+               gap: 8px; margin-bottom: 12px; }
+    .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+    .seg button {
+      background: none; border: 0; color: var(--muted); padding: 6px 12px;
+      cursor: pointer; font: inherit; font-size: 13px;
+    }
+    .seg button.active { background: var(--line); color: var(--text); }
+    .chart-box { position: relative; height: 300px; }
+    @media (max-width: 520px) {
+      .prices { grid-template-columns: 1fr; }
+      .price { font-size: 28px; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="logo">G</div>
+    <div>
+      <h1>GRAM <span class="sub">(бывший Toncoin)</span></h1>
+      <div class="sub">Данные: CoinGecko</div>
+    </div>
+  </header>
+
+  <section class="card">
+    <div class="prices">
+      <div>
+        <div class="label">USD</div>
+        <div class="price" id="usd">—</div>
+        <span class="change" id="chg-usd"></span>
+      </div>
+      <div>
+        <div class="label">RUB</div>
+        <div class="price" id="rub">—</div>
+        <span class="change" id="chg-rub"></span>
+      </div>
+    </div>
+    <div class="status" id="status">Загрузка…</div>
+  </section>
+
+  <section class="card">
+    <div class="toolbar">
+      <div class="seg" id="seg-currency">
+        <button data-v="usd" class="active">USD</button>
+        <button data-v="rub">RUB</button>
+      </div>
+      <div class="seg" id="seg-days">
+        <button data-v="1">24 ч</button>
+        <button data-v="7" class="active">7 дней</button>
+        <button data-v="30">30 дней</button>
+      </div>
+    </div>
+    <div class="chart-box"><canvas id="chart"></canvas></div>
+  </section>
+</main>
+
+<script>
+  const PRICE_EVERY = 30 * 1000;      // курс — каждые 30 секунд
+  const CHART_EVERY = 5 * 60 * 1000;  // график — каждые 5 минут
+  const state = { currency: "usd", days: "7", fetchedAt: null, stale: false };
+  let chart = null;
+
+  const fmt = {
+    usd: v => "$" + v.toLocaleString("ru-RU", { minimumFractionDigits: 3, maximumFractionDigits: 3 }),
+    rub: v => v.toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " ₽",
+  };
+
+  function setChange(el, value) {
+    if (value == null) { el.textContent = ""; return; }
+    const up = value >= 0;
+    el.className = "change " + (up ? "up" : "down");
+    el.textContent = (up ? "▲ +" : "▼ ") + value.toFixed(2) + "% за 24 ч";
+  }
+
+  async function loadPrice() {
+    try {
+      const r = await fetch("/api/price");
+      if (!r.ok) throw new Error(r.status);
+      const d = await r.json();
+      document.getElementById("usd").textContent = fmt.usd(d.usd);
+      document.getElementById("rub").textContent = fmt.rub(d.rub);
+      setChange(document.getElementById("chg-usd"), d.change_24h_usd);
+      setChange(document.getElementById("chg-rub"), d.change_24h_rub);
+      state.fetchedAt = d.fetched_at;
+      state.stale = d.stale;
+      document.title = `GRAM ${fmt.usd(d.usd)}`;
+    } catch (e) {
+      state.stale = true;
+    }
+    renderStatus();
+  }
+
+  function renderStatus() {
+    const el = document.getElementById("status");
+    if (!state.fetchedAt) { el.textContent = "Нет данных, пробую ещё раз…"; return; }
+    const sec = Math.max(0, Math.round(Date.now() / 1000 - state.fetchedAt));
+    const ago = sec < 60 ? `${sec} сек назад` : `${Math.floor(sec / 60)} мин назад`;
+    el.textContent = `Обновлено ${ago} · автообновление каждые 30 сек`
+      + (state.stale ? " · ⚠️ источник не отвечает, показаны последние данные" : "");
+    el.className = "status" + (state.stale ? " warn" : "");
+  }
+
+  async function loadChart() {
+    try {
+      const r = await fetch(`/api/chart?currency=${state.currency}&days=${state.days}`);
+      if (!r.ok) throw new Error(r.status);
+      const d = await r.json();
+      const opts = state.days === "1"
+        ? { hour: "2-digit", minute: "2-digit" }
+        : { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" };
+      const labels = d.points.map(p => new Date(p.t).toLocaleString("ru-RU", opts));
+      const values = d.points.map(p => p.p);
+      drawChart(labels, values);
+    } catch (e) {
+      console.error("График не загрузился", e);
+    }
+  }
+
+  function drawChart(labels, values) {
+    const up = values.length > 1 && values[values.length - 1] >= values[0];
+    const color = up ? "#3fb950" : "#f85149";
+    const ctx = document.getElementById("chart");
+    if (chart) chart.destroy();
+    chart = new Chart(ctx, {
+      type: "line",
+      data: { labels, datasets: [{
+        data: values, borderColor: color, borderWidth: 2, pointRadius: 0,
+        fill: true, backgroundColor: color + "22", tension: 0.2,
+      }]},
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: c => fmt[state.currency](c.parsed.y) } },
+        },
+        scales: {
+          x: { ticks: { color: "#8b949e", maxTicksLimit: 6, maxRotation: 0 },
+               grid: { color: "#262c36" } },
+          y: { ticks: { color: "#8b949e" }, grid: { color: "#262c36" } },
+        },
+      },
+    });
+  }
+
+  function bindSegment(id, key) {
+    document.querySelectorAll(`#${id} button`).forEach(btn => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(`#${id} button`).forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        state[key] = btn.dataset.v;
+        loadChart();
+      });
+    });
+  }
+
+  bindSegment("seg-currency", "currency");
+  bindSegment("seg-days", "days");
+  loadPrice();
+  loadChart();
+  setInterval(loadPrice, PRICE_EVERY);
+  setInterval(loadChart, CHART_EVERY);
+  setInterval(renderStatus, 1000);
+</script>
+</body>
+</html>
